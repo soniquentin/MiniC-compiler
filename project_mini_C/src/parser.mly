@@ -22,10 +22,10 @@
 %left LT LEQ GT GEQ
 %left PLUS MINUS
 %left STAR DIV
-%right NOT
-%nonassoc uminus
+%right NOT uminus
 %nonassoc RPAREN
 %nonassoc ELSE
+%left ARROW
 
 /* Point d'entrée de la grammaire */
 %start fichier
@@ -135,7 +135,7 @@ instruction :
 
 (* Block *)
 block:
-    | LBRACE instruction_list = decl_instr* RBRACE {instruction_list}
+    | LBRACE instruction_list = decl* RBRACE {instruction_list}
 
 
 ident:

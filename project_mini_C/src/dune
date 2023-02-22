@@ -6,5 +6,6 @@
  (infer true))
 (executable
  (name minic)
+ (promote (until-clean))
  (flags ())
  (libraries graphics))

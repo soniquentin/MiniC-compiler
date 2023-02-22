@@ -8,7 +8,6 @@ type ctype =
   | Int 
   | Struct of ident
   | Star of ctype  (* Star void == void * /// Star struct i == Struct i * ///...  *)
-  | Typenull
 
 type param = ctype * ident
 
@@ -31,14 +30,11 @@ and desc_expr =
   | Eident of ident
   | Eaccess of expr * ident     (*  expr -> ident  *)
   | Ecall of ident * expr list   (*   ident(args1,args2)  *)
-  | Eassign of expr * expr (*  expr = expr  *)
+  | Eassign of expr * expr (*  lvalue = expr  *)
   | Ebinop of binop * expr * expr (* expr  OP(+-*/== etc) expr    *)
   | Esizeof of ctype  (* sizeof(struct mystructure) *)
   | Eunop of unop * expr
-  | Elvalue of lvalue
-and lvalue = 
-  | Lvar of ident
-  | Lderef of expr * ident (*  expr -> ident  *)
+
 
 (* déclaration d'une variable *)
 type decl_vars =
@@ -69,7 +65,7 @@ and decl_fct =
   {desc_fct: desc_fct;
   loc: localisation}
 and desc_fct = ctype * ident * param list * block   (* déclaration d'une fonction int f(args1,args2) : {BLOCK} *)
-and block = decl_instr list (* Block = suite d'instructions decl_instr*)
+and block = decl list (* Block = suite d'instructions decl_instr*)
 and decl =  (*  Instruction (decl_instr) = déclaration variable, déclaration fonction ou simplement une instruction *)
   | Dvar of decl_vars
   | Dtyp of decl_typ
@@ -79,3 +75,64 @@ and decl =  (*  Instruction (decl_instr) = déclaration variable, déclaration f
 type fichier =  { 
   decl_list : decl list;
   loc: localisation}
+
+
+
+
+
+(* Arbres de syntaxe abstraite typée de Mini-C *)
+
+type tident = string
+
+type typ =
+  | TInt
+  | TStruct of string
+  | TVoid
+  | Tnull
+  | TStar of typ
+
+type tbinop =
+  | TBadd | TBsub | TBmul | TBdiv   
+  | TBeqq | TBneq | TBlt | TBle | TBgt | TBge 
+  | TBand | TBor                    
+
+type tunop =
+  | TUneg
+  | TUnot
+
+
+type texpr =
+  | TEint of int
+  | TEident of tident
+  | TEaccess of texpr * tident
+  | TEassign of texpr * texpr
+  | TEcall of tident * texpr list
+  | TEunop of tunop * texpr
+  | TEbinop of tbinop * texpr * texpr
+  | TEsizeof of typ
+
+
+type tdecl_vars =
+  | TDecl_solo of ctype * tident * texpr
+  | TDecl_multi of ctype * tident list
+
+type tdecl_typ = tident * tdecl_vars list
+
+type tdecl_instr =
+  | Tnone
+  | Texpr of expr 
+  | Tblock of block
+  | Tif of expr * tdecl_instr
+  | Tifelse of expr * tdecl_instr * tdecl_instr
+  | Twhile of expr * tdecl_instr
+  | Tret of expr option
+and tdecl_fct = ctype * tident * param list * tblock  
+and tblock = tdecl list 
+and tdecl =  
+  | TDvar of tdecl_vars
+  | TDtyp of tdecl_typ
+  | TDfct of tdecl_fct
+  | TDecl_instr of tdecl_instr
+
+type tfichier =  tdecl list
+
