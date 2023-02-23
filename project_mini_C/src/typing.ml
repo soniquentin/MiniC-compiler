@@ -3,6 +3,7 @@ open Ast
 open Tools
 
 exception TypingError of string * (position * position)
+exception Error of string
 
 
 (* stocke les identificateurs de variable et leur type.  *)
@@ -18,8 +19,11 @@ type env_decl =
 
 
 (* Initialise VarState vide *)
-let env = ref VarState.empty
+let my_env = ref VarState.empty
 
+
+
+(* ===== QUELQUES FONCTIONS AUXILIERES ======== *)
 
 (* retourne vrai si les types sont compatibles
    i.e si une expression d'un type peut être convertie en une expression de l'autre type. *)
@@ -62,8 +66,10 @@ let est_bien_forme gamma tau loc = match tau with
 
 
 
+(* ====== TYPAGE ====== *)
+
 (* Typage des expressions*)
-let rec type_expr gamma e = match e.desc_expr with
+let rec type_expr (gamma:env_decl VarState.t) (e:expr) = match e.desc_expr with
   | Eint 0 -> (TEint 0, Tnull)
   | Eint i -> (TEint i, TInt)
   | Eident x -> begin try match VarState.find x gamma with 
@@ -112,10 +118,91 @@ let rec type_expr gamma e = match e.desc_expr with
         end
   | Esizeof ct -> begin match ct with
         | Void -> raise (TypingError (string_of_expr e ^ " : cannot do sizeof(void)" , e.loc) )
-        | Int | Struct s | Star ct2 -> (TEsizeof (convert_ctype ct), TInt)
+        | _ -> (TEsizeof (convert_ctype ct), TInt)
         end
   | Eunop (Uneg, e) -> let te, e_type = type_expr gamma e in if compare_type e_type TInt then (TEunop (TUneg, te), TInt ) else raise (TypingError (string_of_expr e ^ " : expression peut pas être passée en négative" , e.loc) )
   | Eunop (Unot, e) -> let te, e_type = type_expr gamma e in (TEunop (TUnot, te), TInt)
     
 
+  
+(* Typage des instructions *)
+let rec type_desc_vars (gamma:env_decl VarState.t) (l:localisation) (d:decl_vars) = match d.desc_vars with
+  | Decl_solo (ct, id, e) -> begin try match VarState.find id gamma with
+          | _ -> raise (TypingError ("Tentative de déclaration alors que variable " ^ id ^ " déjà existante" ,  l) )
+        with
+          | Not_found -> (* La variable n'a pas encore été déclarée dans l'environnement *)
+              let te, type_e = type_expr gamma e in 
+              if (compare_type (convert_ctype ct) type_e) then (VarState.add id (Env_var type_e) gamma , TDecl_solo (type_e , id, te) )  else raise (TypingError ("Impossible de déclarer. Expression de type " ^ string_of_T type_e ^ ", type attendu " ^ string_of_type ct , l) )
+        end
+  | Decl_multi (ct, id_list) -> 
+      let rec aux_add_to_env env_accu list_of_id = match list_of_id with
+        | [] -> env_accu
+        | t :: q -> begin try match VarState.find t env_accu with
+            | _ -> raise (TypingError ("Tentative de déclaration alors que variable " ^ t ^ " déjà existante" ,  l) )
+          with
+            | Not_found -> aux_add_to_env (VarState.add t (Env_var (convert_ctype ct)) env_accu) q (* La variable n'a pas encore été déclarée dans l'environnement *)
+          end
+      in (aux_add_to_env gamma id_list , TDecl_multi (convert_ctype ct, id_list) )
 
+
+let type_decl_typ (gamma:env_decl VarState.t) (l:localisation) (d:decl_typ) = let id, d_list = d.desc_typ in 
+    let rec aux struct_env_accu t_dvars_list loca li = match li with 
+      | [] -> struct_env_accu, List.rev t_dvars_list
+      | t :: q -> let temp_env, t_dvars = type_desc_vars struct_env_accu loca t in aux temp_env (t_dvars :: t_dvars_list) loca q 
+    in let struct_env, t_list = aux gamma [] l d_list in (VarState.add id (Env_struct struct_env) gamma, (id, t_list))
+
+    (* TODO !! Le (id, t_list), faut le convertir en tdecl_typ = tident * tdecl_vars list . Mais je sais pas comment faire*)
+
+
+let rec type_instr (gamma:env_decl VarState.t) (tau_0:typ) (instr:decl_instr) = match instr.instruction with 
+  | Inone -> Tnone 
+  | Iexpr e -> let te, type_e = type_expr gamma e in Texpr te  (* ça check en même temps le type de e *)
+  | Iif (e, i) -> let te, type_e = type_expr gamma e in if compare_type type_e TVoid then raise(TypingError ("La condition d'un If doit être un entier", instr.loc)) else let ti = type_instr gamma tau_0 i in Tif (te,ti)
+  | Iifelse (e, i1, i2) -> let te, type_e = type_expr gamma e in if compare_type type_e TVoid then raise(TypingError ("La condition d'un If doit être un entier", instr.loc)) else let ti1 = type_instr gamma tau_0 i1 in let ti2 = type_instr gamma tau_0 i2 in Tifelse(te, ti1, ti2)
+  | Iwhile (e, i) -> let te, type_e = type_expr gamma e in if compare_type type_e TVoid then raise(TypingError ("La condition d'un While doit être un entier", instr.loc)) else let ti = type_instr gamma tau_0 i in Twhile (te, ti)
+  | Iret None -> if tau_0 == TVoid then Tret (None) else raise(TypingError ("Fonction void retourne un objet non-Void", instr.loc) )
+  | Iret (Some e) -> let te, type_e = type_expr gamma e in if compare_type type_e tau_0 then Tret (Some te) else raise(TypingError (Printf.sprintf "La fonction retourne type %s, alors que sensée retournée type %s " (string_of_T type_e) (string_of_T ct), instr.loc))
+  | Iblock b -> let tb, final_env = type_block gamma instr.loc tau_0 b in Tblock tb
+and type_block env loc t0 bloc = 
+  let rec aux_type_block accu envi loca tau0 block = match block with
+    | [] -> (List.rev accu, envi)
+    | d :: q -> begin match d with 
+          | Dvar d_vars -> let new_env, type_d = type_desc_vars envi loca d_vars in aux_type_block ( (TDvar type_d) :: accu) new_env loca tau0 q
+          | Dtyp d_typ -> let new_env, type_d = type_decl_typ envi loca d_typ in aux_type_block ( (TDtyp type_d) :: accu) new_env loca tau0 q
+          | Dfct d_fct -> let new_env, type_d = type_decl_fct envi loca tau0 d_fct in aux_type_block ( (TDfct type_d) :: accu) new_env loca tau0 q
+          | Decl_instr d_instr -> let type_d = type_instr envi tau0 d_instr in aux_type_block ( (TDecl_instr type_d) :: accu) envi loca tau0 q
+        end
+  in aux_type_block [] env loc t0 bloc
+and type_decl_fct (gamma:env_decl VarState.t) (l:localisation) (t0:typ) (d:decl_fct) = let ct, id, param_list, body = d.desc_fct in
+    begin try match VarState.find id gamma with
+        | _ -> raise (TypingError ("Tentative de déclaration de fonction alors que variable " ^ id ^ " déjà existante" ,  l) )
+      with
+        | Not_found -> (* La variable qui porte le nom de la fonction n'a pas encore été déclarée dans l'environnement *)
+          let tbody = type_block gamma l t0 body in 
+          (VarState.add id (Env_fun (convert_ctype ct, List.map (fun (c, id) -> convert_ctype c) param_list)) gamma,      ( convert_ctype ct, id, List.map (fun (c, id) -> (convert_ctype c, id ) ) param_list, tbody)  )
+      end
+
+
+
+
+
+(* ====== Build file ====== *)
+
+(* Initialise l'environnement en ajoutant les 2 fonctions qui sont connues par défaut *)
+let init_env () =
+  let temp_env1 = VarState.add "putchar" (Env_fun (TInt, [TInt]) ) !my_env in let temp_env2 = VarState.add "malloc" (Env_fun (TStar TVoid, [TInt]) ) temp_env1 in my_env := temp_env2
+
+
+(* Check si la fonction main est bien présente et bien typée *)
+let check_main_exists (env:env_decl VarState.t) = match VarState.find "main" env with 
+  | Env_fun (TInt, _ ) -> ()
+  | Env_fun (_,_) ->  raise (Error ("La fonction main n'est pas de type Int") )
+  | _ -> raise (Error ("Aucune fonction main trouvée") )
+
+
+(* Construit le fichier final *)
+let type_fichier (d:fichier) = begin
+  init_env (); 
+  let tdecl_list, final_env = type_block !my_env (d.loc) TVoid (d.decl_list) in my_env := final_env; check_main_exists !my_env; 
+  tdecl_list;
+  end

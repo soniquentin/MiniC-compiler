@@ -127,9 +127,9 @@ instruction :
     | SEMICOLON   {Inone} (* ;*)
     | e = expr SEMICOLON {Iexpr e} (* a = 2;*)
     | b = block {Iblock b} (* { a = 2;} *)
-    | IF LPAREN e = expr RPAREN instr = instruction  {Iif (e, instr)}  (* if (a == 2) b = 3; *)
-    | IF LPAREN e = expr RPAREN if_instr = instruction ELSE else_instr = instruction {Iifelse (e,if_instr,else_instr)} (* if (a == 2) b = 3 else b = 4; *)
-    | WHILE LPAREN e = expr RPAREN instr = instruction {Iwhile (e, instr)} (* while (a < 100) a = a+1; *)
+    | IF LPAREN e = expr RPAREN instr = decl_instr  {Iif (e, instr)}  (* if (a == 2) b = 3; *)
+    | IF LPAREN e = expr RPAREN if_instr = decl_instr ELSE else_instr = decl_instr {Iifelse (e,if_instr,else_instr)} (* if (a == 2) b = 3 else b = 4; *)
+    | WHILE LPAREN e = expr RPAREN instr = decl_instr {Iwhile (e, instr)} (* while (a < 100) a = a+1; *)
     | RETURN e = expr? SEMICOLON {Iret e} (* return b; *)
 
 

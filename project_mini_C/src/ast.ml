@@ -44,10 +44,13 @@ and desc_vars =
   | Decl_solo of ctype * ident * expr (* int i = 12; *)
   | Decl_multi of ctype * ident list (* int i, j, k; *)
 
+
+  (* déclaration de structures*)
 type decl_typ =
   {desc_typ: desc_typ;
    loc : localisation}
 and desc_typ = ident * decl_vars list
+
 
 (* Instructions *)
 type decl_instr = 
@@ -57,9 +60,9 @@ and instruction =
   | Inone
   | Iexpr of expr 
   | Iblock of block
-  | Iif of expr * instruction
-  | Iifelse of expr * instruction * instruction
-  | Iwhile of expr * instruction
+  | Iif of expr * decl_instr
+  | Iifelse of expr * decl_instr * decl_instr
+  | Iwhile of expr * decl_instr
   | Iret of expr option
 and decl_fct = 
   {desc_fct: desc_fct;
@@ -112,21 +115,23 @@ type texpr =
   | TEsizeof of typ
 
 
+type tparam = typ * tident
+
 type tdecl_vars =
-  | TDecl_solo of ctype * tident * texpr
-  | TDecl_multi of ctype * tident list
+  | TDecl_solo of typ * tident * texpr
+  | TDecl_multi of typ * tident list
 
 type tdecl_typ = tident * tdecl_vars list
 
 type tdecl_instr =
   | Tnone
-  | Texpr of expr 
-  | Tblock of block
-  | Tif of expr * tdecl_instr
-  | Tifelse of expr * tdecl_instr * tdecl_instr
-  | Twhile of expr * tdecl_instr
-  | Tret of expr option
-and tdecl_fct = ctype * tident * param list * tblock  
+  | Texpr of texpr 
+  | Tblock of tblock
+  | Tif of texpr * tdecl_instr
+  | Tifelse of texpr * tdecl_instr * tdecl_instr
+  | Twhile of texpr * tdecl_instr
+  | Tret of texpr option
+and tdecl_fct = typ * tident * tparam list * tblock  
 and tblock = tdecl list 
 and tdecl =  
   | TDvar of tdecl_vars
