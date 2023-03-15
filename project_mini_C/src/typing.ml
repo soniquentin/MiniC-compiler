@@ -1,6 +1,6 @@
 open Lexing
 open Ast
-open Tools
+open Utils
 
 exception TypingError of string * (position * position)
 exception Error of string
@@ -21,6 +21,15 @@ type env_decl =
 (* Initialise VarState vide *)
 let my_env = ref VarState.empty
 
+(* Dictionnaire pour garder en mémoire les structures qui ont été créées {ident : tstruct} *)
+let all_structs = (Hashtbl.create 17 : (ident, tstruct) Hashtbl.t)
+
+let rec convert_ctype = function
+  | Void -> TVoid
+  | Int -> TInt
+  | Struct s -> TStruct (Hashtbl.find all_structs s)
+  | Star ct -> TStar (convert_ctype ct)
+
 
 
 (* ===== QUELQUES FONCTIONS AUXILIERES ======== *)
@@ -30,7 +39,7 @@ let my_env = ref VarState.empty
 let rec compare_type t1 t2 = match (t1, t2) with
   (* Même type sont compatible évidement *)
   | (TInt, TInt) | (Tnull, Tnull)  -> true
-  | TStruct s, TStruct t when s = t -> true
+  | TStruct s, TStruct t when s.name = t.name -> true
   | TStar TVoid, TStar _ -> true
   | TStar _, TStar TVoid -> true
   | TStar typ1, TStar typ2 -> compare_type typ1 typ1
@@ -56,11 +65,11 @@ let l_value e = match e.desc_expr with
 (* vérifie si le type est bien formé
    i.e si tous les types de structures utilisés dans le type sont définis dans l'environnement. *)
 let est_bien_forme gamma tau loc = match tau with
-  | TStruct s -> begin try match VarState.find s gamma with
+  | TStruct s -> begin try match VarState.find s.name gamma with
         | Env_struct _ -> ()
-        | _ -> raise (TypingError ("struct " ^ s ^ " pas bien formé : pas une structure", loc) )
+        | _ -> raise (TypingError ("struct " ^ s.name ^ " pas bien formé : pas une structure", loc) )
       with
-        | Not_found -> raise (TypingError ("struct " ^ s ^ " pas bien formé : manquant dans l'environnement", loc) ) 
+        | Not_found -> raise (TypingError ("struct " ^ s.name ^ " pas bien formé : manquant dans l'environnement", loc) ) 
       end
   | _ -> ()
 
@@ -70,7 +79,7 @@ let est_bien_forme gamma tau loc = match tau with
 
 (* Typage des expressions*)
 let rec type_expr (gamma:env_decl VarState.t) (e:expr) = match e.desc_expr with
-  | Eint 0 -> (TEint 0, Tnull)
+  | Eint 0l -> (TEint 0l, Tnull)
   | Eint i -> (TEint i, TInt)
   | Eident x -> begin try match VarState.find x gamma with 
         | Env_var v -> (TEident x, v)   (* dans l'event, x est une variable. C'est bon *)
@@ -82,17 +91,17 @@ let rec type_expr (gamma:env_decl VarState.t) (e:expr) = match e.desc_expr with
                         let tid, type_id = type_expr gamma e1 in let te0, typ_e0 = type_expr gamma e0 in if compare_type type_id typ_e0 then (TEassign (tid, te0), type_id) else raise (TypingError (string_of_expr e ^ " : types pas compatibles", e.loc) )
   | Eaccess (e0, x) -> begin let te0,typ_e0 = type_expr gamma e0 in match typ_e0 with  (* on cherche le type de e0. Pour l'instant, seul les strucutres peuvent supporter l'accès à un champs: e->s *)
         | TStruct s (* e0 est bien une structure de type s *) -> 
-            begin try match VarState.find s gamma with (* on veut alors accéder à l'environnement de la structure *)
+            begin try match VarState.find s.name gamma with (* on veut alors accéder à l'environnement de la structure *)
               | Env_struct env_of_s -> 
                 begin try match VarState.find x env_of_s with (* On cherche x dans l'environnement de s *)
-                    | Env_var typ_of_x (* est bien une variable de l'environnement de s*) -> (TEaccess (te0, x), typ_of_x) 
+                    | Env_var typ_of_x (* est bien une variable de l'environnement de s*) -> let field_x = Hashtbl.find s.fields x in (TEaccess (te0, field_x), typ_of_x) 
                     | _ -> raise (TypingError (x ^ " : n'est pas un identifier/variable pour la structure" , e.loc) )
                   with 
                     | Not_found -> raise (TypingError (x ^ " : n'est pas déclarée dans la structure" , e.loc) )
                 end
               | _ -> raise (TypingError (string_of_expr e ^ " : doit être une structure" , e.loc) )
             with 
-              | Not_found -> raise (TypingError (s ^ " : n'est pas déclarée dans l'environnement" , e.loc) )
+              | Not_found -> raise (TypingError (s.name ^ " : n'est pas déclarée dans l'environnement" , e.loc) )
           end
         | _ -> raise (TypingError (string_of_expr e ^ " : Access possible que pour les structures" , e.loc) )
         end
@@ -146,12 +155,25 @@ let rec type_desc_vars (gamma:env_decl VarState.t) (l:localisation) (d:decl_vars
 
 
 let type_decl_typ (gamma:env_decl VarState.t) (l:localisation) (d:decl_typ) = let id, d_list = d.desc_typ in 
-    let rec aux struct_env_accu t_dvars_list loca li = match li with 
-      | [] -> struct_env_accu, List.rev t_dvars_list
-      | t :: q -> let temp_env, t_dvars = type_desc_vars struct_env_accu loca t in aux temp_env (t_dvars :: t_dvars_list) loca q 
-    in let struct_env, t_list = aux gamma [] l d_list in (VarState.add id (Env_struct struct_env) gamma, (id, t_list))
+    let new_struct = {name = id; fields = (Hashtbl.create 17 : (ident,field) Hashtbl.t)} in 
+    let rec aux struct_env_accu loca li num = begin match li with 
+      | [] -> struct_env_accu
+      | t :: q -> begin match t.desc_vars with 
+                  | Decl_solo (ct, id, e) -> begin try match VarState.find id struct_env_accu with
+                                                | _ -> raise (TypingError ("Tentative de déclaration alors que variable " ^ id ^ " déjà existante" ,  l) )
+                                              with
+                                                | Not_found -> (* La variable n'a pas encore été déclarée dans l'environnement *)
+                                                    let te, type_e = type_expr struct_env_accu e in 
+                                                    if (compare_type (convert_ctype ct) type_e) then let new_env = VarState.add id (Env_var type_e) struct_env_accu in Hashtbl.add new_struct.fields id {field_typ = (convert_ctype ct); field_pos = num} ; aux new_env loca q (num + 1)
+                                                    else raise (TypingError ("Impossible de déclarer. Expression de type " ^ string_of_T type_e ^ ", type attendu " ^ string_of_type ct , l) )
+                                                end
+                  | _ -> raise (TypingError ("Définition d'une strucutre qu'avec des lignes de la formes 'int a = 2;' (i.e Decl_solo)", l) )
+                end
+      end
+    in let struct_env = aux gamma [] d_list 0 in Hashtbl.add all_structs id new_struct; (VarState.add id (Env_struct struct_env) gamma, new_struct)
 
     (* TODO !! Le (id, t_list), faut le convertir en tdecl_typ = tident * tdecl_vars list . Mais je sais pas comment faire*)
+
 
 
 let rec type_instr (gamma:env_decl VarState.t) (tau_0:typ) (instr:decl_instr) = match instr.instruction with 
@@ -161,7 +183,7 @@ let rec type_instr (gamma:env_decl VarState.t) (tau_0:typ) (instr:decl_instr) = 
   | Iifelse (e, i1, i2) -> let te, type_e = type_expr gamma e in if compare_type type_e TVoid then raise(TypingError ("La condition d'un If doit être un entier", instr.loc)) else let ti1 = type_instr gamma tau_0 i1 in let ti2 = type_instr gamma tau_0 i2 in Tifelse(te, ti1, ti2)
   | Iwhile (e, i) -> let te, type_e = type_expr gamma e in if compare_type type_e TVoid then raise(TypingError ("La condition d'un While doit être un entier", instr.loc)) else let ti = type_instr gamma tau_0 i in Twhile (te, ti)
   | Iret None -> if tau_0 == TVoid then Tret (None) else raise(TypingError ("Fonction void retourne un objet non-Void", instr.loc) )
-  | Iret (Some e) -> let te, type_e = type_expr gamma e in if compare_type type_e tau_0 then Tret (Some te) else raise(TypingError (Printf.sprintf "La fonction retourne type %s, alors que sensée retournée type %s " (string_of_T type_e) (string_of_T ct), instr.loc))
+  | Iret (Some e) -> let te, type_e = type_expr gamma e in if compare_type type_e tau_0 then Tret (Some te) else raise(TypingError (Printf.sprintf "La fonction retourne mauvais type", instr.loc))
   | Iblock b -> let tb, final_env = type_block gamma instr.loc tau_0 b in Tblock tb
 and type_block env loc t0 bloc = 
   let rec aux_type_block accu envi loca tau0 block = match block with
@@ -178,7 +200,7 @@ and type_decl_fct (gamma:env_decl VarState.t) (l:localisation) (t0:typ) (d:decl_
         | _ -> raise (TypingError ("Tentative de déclaration de fonction alors que variable " ^ id ^ " déjà existante" ,  l) )
       with
         | Not_found -> (* La variable qui porte le nom de la fonction n'a pas encore été déclarée dans l'environnement *)
-          let tbody = type_block gamma l t0 body in 
+          let tbody, env = type_block gamma l t0 body in 
           (VarState.add id (Env_fun (convert_ctype ct, List.map (fun (c, id) -> convert_ctype c) param_list)) gamma,      ( convert_ctype ct, id, List.map (fun (c, id) -> (convert_ctype c, id ) ) param_list, tbody)  )
       end
 
@@ -201,6 +223,7 @@ let check_main_exists (env:env_decl VarState.t) = match VarState.find "main" env
 
 
 (* Construit le fichier final *)
+(* Ce truc va traiter le fichier comme un gros block et ça va renvoyer l'environnement final. Puis on check si y'a bien une focnction main *)
 let type_fichier (d:fichier) = begin
   init_env (); 
   let tdecl_list, final_env = type_block !my_env (d.loc) TVoid (d.decl_list) in my_env := final_env; check_main_exists !my_env; 

@@ -1,7 +1,10 @@
 open Ast
 open Format
 
-(* tools.ml transforme les élements de ast.ml en chaine de caractère *)
+exception Error of string
+
+
+(* utils.ml transforme les élements de ml en chaine de caractère *)
 let rec string_of_type = function
   | Void -> "Void"
   | Int -> "Int"
@@ -11,13 +14,13 @@ let rec string_of_type = function
 let rec string_of_T = function
   | TVoid -> "Void"
   | TInt -> "Int"
-  | TStruct(id) -> "Struct " ^ id
+  | TStruct t -> "Struct " ^ t.name
   | TStar(t) -> (string_of_T t) ^ " *"
   | Tnull -> "null"
 
 
 let rec string_of_expr e = match e.desc_expr with
-  | Eint i -> string_of_int i
+  | Eint i -> string_of_int (Int32.to_int i)
   | Eident i -> i
   | Eassign (e1, e2) -> string_of_expr e1 ^ " = " ^ string_of_expr e2
   | Ecall (i, el) -> i ^ "(" ^ (String.concat ", " (List.map string_of_expr el) ) ^ ")"
@@ -58,10 +61,17 @@ let convert_binop = function
   | Bge -> TBge
 
 
-let rec convert_ctype = function
-  | Void -> TVoid
-  | Int -> TInt
-  | Struct s -> TStruct s
-  | Star ct -> TStar (convert_ctype ct)
 
-  
+  (* Convertit les noeuds typées de l'arbre abtrait en opération Ops*)
+let tast_to_ops = function
+| TBeqq -> Ops.Msete
+| TBneq -> Ops.Msetne
+| TBlt -> Ops.Msetl
+| TBle -> Ops.Msetle
+| TBgt -> Ops.Msetg
+| TBge -> Ops.Msetge
+| TBadd -> Ops.Madd
+| TBsub -> Ops.Msub
+| TBmul -> Ops.Mmul
+| TBdiv -> Ops.Mdiv
+| _ -> raise (Error "Pb de conversion : noeuds arbre abstrait -> opération ops")

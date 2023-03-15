@@ -26,7 +26,7 @@ type expr =
   {desc_expr: desc_expr;
    loc : localisation}
 and desc_expr =
-  | Eint of int
+  | Eint of int32
   | Eident of ident
   | Eaccess of expr * ident     (*  expr -> ident  *)
   | Ecall of ident * expr list   (*   ident(args1,args2)  *)
@@ -89,10 +89,16 @@ type tident = string
 
 type typ =
   | TInt
-  | TStruct of string
+  | TStruct of tstruct
   | TVoid
   | Tnull
   | TStar of typ
+and tstruct = {
+    name  : ident;
+    fields : (ident, field) Hashtbl.t}
+and field = {
+    field_typ : typ;
+    field_pos : int}
 
 type tbinop =
   | TBadd | TBsub | TBmul | TBdiv   
@@ -105,9 +111,9 @@ type tunop =
 
 
 type texpr =
-  | TEint of int
+  | TEint of int32
   | TEident of tident
-  | TEaccess of texpr * tident
+  | TEaccess of texpr * field
   | TEassign of texpr * texpr
   | TEcall of tident * texpr list
   | TEunop of tunop * texpr
@@ -121,7 +127,6 @@ type tdecl_vars =
   | TDecl_solo of typ * tident * texpr
   | TDecl_multi of typ * tident list
 
-type tdecl_typ = tident * tdecl_vars list
 
 type tdecl_instr =
   | Tnone
@@ -135,9 +140,9 @@ and tdecl_fct = typ * tident * tparam list * tblock
 and tblock = tdecl list 
 and tdecl =  
   | TDvar of tdecl_vars
-  | TDtyp of tdecl_typ
+  | TDtyp of tstruct
   | TDfct of tdecl_fct
   | TDecl_instr of tdecl_instr
 
-type tfichier =  tdecl list
+type tfichier = tblock (* tblock =  tdecl list, c'est pareil*)
 
