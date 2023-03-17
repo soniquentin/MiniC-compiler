@@ -1,1 +1,1 @@
-(* val program :  Rtltree.file -> Ertltree.file *)
+val program :  Rtltree.file -> Ertltree.file
