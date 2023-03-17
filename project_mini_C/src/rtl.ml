@@ -14,13 +14,7 @@ let add_label_in_graph (i:instr) =
 
 
 (* Dictionnaire pour garder les fonctions créées {ident : [info sur les fonctions]} *)
-type fun_info = {
-  r_ret : register; (* registre avec valeur de renvoyée *)
-  l_enter : label ; (* label d'entrée du graphe de flow de control *)
-  l_exit : label; (* label de sorti du flow*)
-  r_args : register list; (* liste des registres pour chaque arguments *)
-} 
-let all_fun = (Hashtbl.create 17 : (Ast.tident, fun_info) Hashtbl.t)
+let all_fun = (Hashtbl.create 17 : (Ast.tident, deffun) Hashtbl.t)
 
 
 (* On traduit les expressions *)
@@ -110,7 +104,7 @@ let rec translate_expr (e:Ast.texpr) (rd:register) (ld:label) (r_env:(string,reg
                                 let rec gen_p_reg accu = function (* Créer la liste r_1, ..., r_p *)
                                   | [] -> List.rev accu
                                   | t :: q -> gen_p_reg (Register.fresh() :: accu) q in
-                                let list_of_p_registers = gen_p_reg [] f_info.r_args in let l_d_1 = add_label_in_graph (Ecall (rd, id, list_of_p_registers, ld)) in 
+                                let list_of_p_registers = gen_p_reg [] f_info.fun_formals in let l_d_1 = add_label_in_graph (Ecall (rd, id, list_of_p_registers, ld)) in 
                                 let rec store_all_expr expr_list reg_list final_l = begin match expr_list, reg_list with 
                                     | [],[] -> final_l
                                     | e1::q1 , r2::q2 -> let next_l = store_all_expr q1 q2 final_l in translate_expr e1 r2 next_l r_env
@@ -124,7 +118,7 @@ let rec translate_expr (e:Ast.texpr) (rd:register) (ld:label) (r_env:(string,reg
 and translate_instr (i:Ast.tdecl) (rd:register) (ld:label) (rret:register) (r_env:(string,register) Hashtbl.t)  = match i with
     | Ast.TDvar td_vars -> translate_decl_vars td_vars rd ld r_env
     | Ast.TDtyp td_typ -> add_label_in_graph (Egoto ld) (* Rien à faire *)
-    | Ast.TDfct td_fct ->  raise (Error "TODO")
+    | Ast.TDfct td_fct ->   translate_decl_fct td_fct rd ld r_env
     | Ast.TDecl_instr td_instr -> translate_decl_instr td_instr rd ld rret r_env
 and translate_decl_instr (x:Ast.tdecl_instr) (rd:register) (ld:label) (rret:register) (r_env:(string,register) Hashtbl.t) = begin match x with
       | Ast.Tnone -> add_label_in_graph (Egoto ld)
@@ -188,18 +182,26 @@ and translate_decl_fct (x:Ast.tdecl_fct) (rd:register) (ld:label) (r_env:(string
           let rec add_args_to_env accu = function (* Ajoute les arguments à l'environnement et renvoie la liste des pseudo-registres : chaque argument = registre frais *)
               | [] -> List.rev accu
               | (_, id) :: q -> let arg_r = Register.fresh() in Hashtbl.add r_env id arg_r; add_args_to_env (arg_r :: accu) q
-          in let return_r = Register.fresh() in 
-          let f_info = {r_ret = return_r ; (* registre avec valeur de renvoyée *)
-                            l_enter = translate_block body rd ld return_r r_env; (* label d'entrée du graphe de flow de control *)
-                            l_exit = ld; (* label de sorti du flow*)
-                            r_args = add_args_to_env [] args_list (* liste des registres pour chaque arguments *)
-                          } in 
-          Hashtbl.add all_fun id_fun f_info;
+          in let return_r = Register.fresh() in let exit_label = Label.fresh() in 
+          let f_info = {
+            fun_name   = id_fun;
+            fun_formals= add_args_to_env [] args_list (* liste des registres pour chaque arguments *);
+            fun_result = return_r ; (* registre avec valeur de renvoyée *)
+            fun_locals = Register.set_of_list ([]);
+            (** toutes les variables locales de la fonction maintenant regroupées ici *)
+            fun_entry  = translate_block body rd exit_label return_r r_env;
+            fun_exit   = exit_label;
+            fun_body   = !graph;
+          } in 
+          Hashtbl.add all_fun id_fun f_info; ld (* Renvoie ld parce que la définition d'une fonction ne fait rien *)
+
 
 
 (* On traduit le programme *)
 and program (p:Ast.tfichier) = let r_env = (Hashtbl.create 17 : (string,register) Hashtbl.t) in let final_r = Register.fresh() in let final_l = Label.fresh() in
     let rec aux r_next l_next = function 
-          | [] -> l_next
+          | [] -> ()
           | t :: q -> let r_temp =  Register.fresh() in let prev_l = translate_instr t r_next l_next r_next r_env in aux r_temp prev_l q
-    in aux final_r final_l (List.rev p)
+    in aux final_r final_l (List.rev p); 
+    let all_fun_info = ref [] in Hashtbl.iter (fun _ v -> all_fun_info := v :: !all_fun_info) all_fun; { funs = List.rev !all_fun_info} (* On loop sur la hashtable pour récupérer toutes ses valeurs qui sont ici les infos des fonctions *)
+
