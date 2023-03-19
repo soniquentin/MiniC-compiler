@@ -1,4 +1,5 @@
 open Ltltree
+open Ops
 
 
 (* CONSTRUCTION GRAPHE D'INTERFERENCE *)
@@ -179,20 +180,20 @@ let update_possible_color (color_to_remove) =
     in Register.M.iter solo_update !possible_colors
    
 
-let color (graph:igraph) = 
+let color (graphi:igraph) = 
     let nb_spills = ref 0 in 
 
     (* Initialise le dictionnaire reg_colorization = {register : color}. Ne sert que pendant l'initialisation de possible_colors *)
-    init_reg_colorization(graph);
+    init_reg_colorization(graphi);
 
     (* Initialise le dictionnaire colorization = {register : operand}  *)
-    init_colorization(graph);
+    init_colorization(graphi);
 
     (* Initialise le dictionnaire todo = {register : 0 ou 1}  *)
-    make_todo(graph);
+    make_todo(graphi);
 
     (* Initialise le dictionnaire possible_colors = {register : potential_color }  *)
-    init_possible_colors(graph);
+    init_possible_colors(graphi);
 
     while not(is_empty_todo()) do
       (* Choisit un registre à colorier s'il y en a selon les priorités *)
@@ -217,4 +218,124 @@ let color (graph:igraph) =
           colorization := Register.M.add picked_reg (Spilled (- 8 - !nb_spills * 8)) !colorization
         end
     done;
-  graph
+    graphi, !nb_spills
+
+
+(* TRADUCTION ERTL -> LTL *)
+
+exception Error of string
+
+let nb_spilled = ref 0
+
+(* Initialise le créer un dictionnaire vide *)
+let graph = ref Label.M.empty
+
+(* Ajoute un nouveau label dans le dictionnaire *)
+let add_label_in_graph (i:instr) =
+  let new_label = Label.fresh () in graph := Label.M.add new_label i !graph; new_label
+
+(* Fonction qui récupère la couleur d'un registre ERTL et qui renvoie true si c'est spilled *)
+let lookup r = if Register.is_hw r 
+                  then Reg r, false 
+                  else begin 
+                    let color_find = Register.M.find r !colorization in match color_find with
+                      | Reg _ -> color_find, false
+                      | Spilled _ -> color_find, true
+                  end
+
+
+
+
+let instr = function
+  | Ertltree.Econst(n, r, l) -> Econst (n, fst (lookup r), l)
+  | Ertltree.Ereturn -> Ereturn
+  | Ertltree.Egoto (l)-> Egoto l
+  | Ertltree.Ecall (ident, num_args, l) -> Ecall (ident, l)
+  | Ertltree.Emunop (unop, r, l) -> Emunop (unop, fst (lookup r), l) 
+  | Ertltree.Emubranch (branch, r, l1, l2) -> Emubranch (branch, fst (lookup r), l1, l2)
+
+  | Ertltree.Embbranch (branch, r1, r2, l1, l2) -> let op1 = fst (lookup r1) in
+                                                  let op2 = fst (lookup r2) in
+                                                  Embbranch (branch, op1, op2, l1, l2)
+                                                
+  | Ertltree.Embinop (binop, r1, r2, l) -> let op1, is_spilled1 = lookup r1 in let op2, is_spilled2 = lookup r2 in begin match binop, is_spilled1, is_spilled2 with
+                                              | Mmov, _, _ when op1 = op2 -> Egoto l
+                                              | Mmov, true, true  -> let temp_r = Register.tmp1 in
+                                                                    let l_d_1 = add_label_in_graph (Embinop (Mmov, Reg (temp_r), op2, l)) in
+                                                                    Embinop (Mmov, op1 , Reg(temp_r), l_d_1)
+                                              | Mmov,_,_ -> Embinop (Mmov, op1, op2, l)
+                                              | Mmul, _, true  -> let temp_r = Register.tmp1 in
+                                                                  let l_d_1 = add_label_in_graph (Embinop (Mmov, Reg(temp_r), op2, l)) in
+                                                                  let l_d_2 = add_label_in_graph (Embinop (Mmul, op1, Reg(temp_r), l_d_1)) in
+                                                                  Embinop (Mmov, op2,  Reg(temp_r) , l_d_2)
+                                              | _, true, true -> let temp_r = Register.tmp1 in
+                                                                  let l_d_1= add_label_in_graph (Embinop (Mmov, Reg(temp_r) , op2 , l)) in
+                                                                  let l_d_2= add_label_in_graph (Embinop (binop, op1, Reg(temp_r), l_d_1)) in
+                                                                  Embinop (Mmov, op2 ,Reg(temp_r) , l_d_2)
+                                              | _, _,_ -> Embinop (binop, op1, op2, l)
+                                              end
+                                
+  | Ertltree.Eload (r, n, rd, l) -> let op_d = fst (lookup rd) in
+                                    let src_op = fst (lookup r) in
+                                    let l_d_1, dest_r = match op_d with
+                                        | Reg r -> l, r
+                                        | Spilled i -> let temp_op = Reg (Register.tmp1) in
+                                                      let l_temp = add_label_in_graph (Embinop (Mmov, temp_op, op_d, l)) in l_temp, Register.tmp1
+                                    in begin match src_op with 
+                                        | Reg r -> Eload (r, n, dest_r, l_d_1)
+                                        | Spilled i -> let temp_r = Register.tmp2 in
+                                                      let src_op = Reg (temp_r) in
+                                                      let l_d_2 = add_label_in_graph (Eload(temp_r, n, dest_r, l_d_1)) in
+                                                      Embinop (Mmov, src_op, src_op, l_d_2)
+                                        end
+
+  | Ertltree.Estore (r, rd, n, l) -> let op_d = fst (lookup rd) in
+                                     let src_op = fst (lookup r) in
+                                     let l_d_1, dest_r = match op_d with
+                                        | Reg (r) -> l, r
+                                        | Spilled (i) -> let temp_op = Reg (Register.tmp1) in
+                                                        let l_temp= add_label_in_graph (Embinop (Mmov, temp_op, op_d, l)) in l_temp, Register.tmp1
+                                      in begin match src_op with 
+                                        | Reg r -> Estore (r, dest_r, n, l_d_1) 
+                                        | Spilled i -> let temp_r = Register.tmp2 in
+                                                        let src_op = Reg (temp_r) in
+                                                        let l_d_2 = add_label_in_graph (Estore(temp_r, dest_r, n, l_d_1)) in
+                                                        Embinop (Mmov, src_op, src_op, l_d_2)
+                                      end
+
+  | Ertltree.Epush_param (r, l) -> Epush (fst (lookup r), l)
+  | Ertltree.Ealloc_frame (l) -> let l_d_1 = if !nb_spilled <> 0
+                                            then add_label_in_graph (Emunop(Maddi (Int32.of_int(- 8 * !nb_spilled)), Reg(Register.rsp), l))
+                                            else l in
+                                let l_d_2 = add_label_in_graph (Embinop(Mmov, Reg(Register.rsp), Reg(Register.rbp), l_d_1)) in
+                                Epush (Reg (Register.rbp), l_d_2)
+  | Ertltree.Edelete_frame (l) -> let label = add_label_in_graph (Epop (Register.rbp, l)) in
+                                  Embinop(Mmov, Reg(Register.rbp), Reg(Register.rsp), label)
+  | Ertltree.Eget_param (n, r, l) -> let op, is_spilled = lookup r in
+                                    if is_spilled
+                                    then let temp_r = Register.tmp1 in
+                                          let l_d_1 = add_label_in_graph (Embinop (Mmov, Reg(temp_r), op, l)) in
+                                          Embinop (Mmov, Spilled(n) , Reg(temp_r), l_d_1)
+                                    else Embinop(Mmov, Spilled(n), op , l)
+
+
+(* Convertit les instructions ertl en instructions ltl *)
+(* Reçoit une instruction ERTL :   ertl : i --> next_l *)
+let ertl_to_ltl_instr ertl_l ertl_i = let ltl_i = instr ertl_i in graph := Label.M.add ertl_l ltl_i !graph
+
+(* Convertit les fonctions *)
+let translate_fct (f:Ertltree.deffun) = Label.M.iter ertl_to_ltl_instr f.Ertltree.fun_body ; (* Convertit chaque instruction RTL en appliquant la fonction de convertion sur le dictionnaire Label.M = {étiquette : instruction RTL} *)
+{
+  fun_name = f.Ertltree.fun_name;
+  fun_entry = f.Ertltree.fun_entry;
+  fun_body = !graph;
+}
+
+
+let program p = 
+  let inter_graph = make p.Ertltree.liveness_analyze in
+  let colors, n = color inter_graph in nb_spilled := n;
+  let funlist = List.map translate_fct p.Ertltree.funs in
+  {
+    funs = funlist;
+  }
