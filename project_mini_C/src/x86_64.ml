@@ -26,6 +26,7 @@ let r12 = "%r12"
 let r13 = "%r13"
 let r14 = "%r14"
 let r15 = "%r15"
+let register64 (r: Register.t) = (r :> string)
 
 let eax = "%eax"
 let ebx = "%ebx"
@@ -81,6 +82,24 @@ let r12b = "%r12b"
 let r13b = "%r13b"
 let r14b = "%r14b"
 let r15b = "%r15b"
+let register8 = function
+  | "%rax" -> al
+  | "%rbx" -> bl
+  | "%rcx" -> cl
+  | "%rdx" -> dl
+  | "%rsi" -> sil
+  | "%rdi" -> dil
+  | "%rbp" -> bpl
+  | "%rsp" -> spl
+  | "%r8"  -> r8b
+  | "%r9"  -> r9b
+  | "%r10" -> r10b
+  | "%r11" -> r11b
+  | "%r12" -> r12b
+  | "%r13" -> r13b
+  | "%r14" -> r14b
+  | "%r15" -> r15b
+  | _ -> assert false
 
 type label = string
 
@@ -100,7 +119,7 @@ let ind ?(ofs=0) ?index ?(scale=1) r = fun fmt () -> match index with
   | Some r1 -> fprintf fmt "%d(%s,%s,%d)" ofs r r1 scale
 let abslab (l: label) = fun fmt () -> fprintf fmt "%a" mangle l
 let rellab (l: label) = fun fmt () -> fprintf fmt "%a(%%rip)" mangle l
-let lab = rellab
+let lab = abslab
 let ilab (l: label) = fun fmt () -> fprintf fmt "$%a" mangle l
 
 type 'a asm =
@@ -143,7 +162,7 @@ let movw a b = ins "movw %a, %a" a () b ()
 let movl a b = ins "movl %a, %a" a () b ()
 let movq a b = ins "movq %a, %a" a () b ()
 
-let movabsq a b = ins "movabsq %a, %s" a () b
+let movabsq a b = ins "movabsq %Ld, %s" a b
 
 let movsbw a b = ins "movsbw %a, %s" a () b
 let movsbl a b = ins "movsbl %a, %s" a () b

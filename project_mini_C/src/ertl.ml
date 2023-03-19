@@ -101,16 +101,6 @@ let translate_fct (f:Rtltree.deffun) = Label.M.iter rtl_to_ertl_instr f.Rtltree.
 
 
 (*  ======= ANALYSE DE DUREE DE VIE =======  *)
-type live_info = {
-         instr: instr;
-          succ: Label.t list;    (* successeurs *)
-  mutable pred: Label.set;       (* prédécesseurs *)
-          defs: Register.set;    (* définitions *)
-          uses: Register.set;    (* utilisations *)
-  mutable  ins: Register.set;    (* variables vivantes en entrée *)
-  mutable outs: Register.set;    (* variables vivantes en sortie *)
-}
-
 (* Table de hashage qui associe chaque label à son live_info : utile pendant toute l'analyse de durée de vie*)
 let live_info_tab = (Hashtbl.create 32 : (label, live_info) Hashtbl.t)
 
@@ -184,4 +174,6 @@ let liveness (graph_map:cfg) =
 let rec program p =
   {
     funs = List.map translate_fct p.Rtltree.funs;
+    liveness_analyze = liveness !graph;
+    ertl_graph = !graph
   }

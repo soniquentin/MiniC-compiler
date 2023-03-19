@@ -43,10 +43,25 @@ type deffun = {
   fun_body : cfg;
 }
 
+
+type live_info = {
+         instr: instr;
+          succ: Label.t list;    (* successeurs *)
+  mutable pred: Label.set;       (* prédécesseurs *)
+          defs: Register.set;    (* définitions *)
+          uses: Register.set;    (* utilisations *)
+  mutable  ins: Register.set;    (* variables vivantes en entrée *)
+  mutable outs: Register.set;    (* variables vivantes en sortie *)
+}
+
 (** Un programme ERTL. *)
 type file = {
   funs : deffun list;
+  liveness_analyze : live_info Label.map;
+  ertl_graph : cfg
 }
+
+
 
 
 (** {2 Calcul des définitions et utilisations de chaque instruction} *)
