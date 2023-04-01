@@ -1,4 +1,0 @@
-(executable
- (name minic)
- (promote (until-clean))
- (flags ()))
